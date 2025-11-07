@@ -3,6 +3,10 @@ import HeroCover from './components/HeroCover';
 import Sidebar from './components/Sidebar';
 import NotificationBar from './components/NotificationBar';
 import Dashboard from './components/Dashboard';
+import Forecasting from './components/Forecasting';
+import Procurement from './components/Procurement';
+import InventoryOptimization from './components/InventoryOptimization';
+import Anomalies from './components/Anomalies';
 
 const App = () => {
   const [started, setStarted] = useState(false);
@@ -26,18 +30,10 @@ const App = () => {
             <Sidebar current={route} onNavigate={setRoute} />
             <main className="min-h-0 flex-1 overflow-y-auto">
               {route === 'dashboard' && <Dashboard />}
-              {route === 'forecasting' && (
-                <div className="p-6 text-white">Forecasting UI will appear here.</div>
-              )}
-              {route === 'procurement' && (
-                <div className="p-6 text-white">Procurement suggestions will appear here.</div>
-              )}
-              {route === 'inventory' && (
-                <div className="p-6 text-white">Inventory optimization results will appear here.</div>
-              )}
-              {route === 'anomalies' && (
-                <div className="p-6 text-white">Anomaly detection details will appear here.</div>
-              )}
+              {route === 'forecasting' && <Forecasting />}
+              {route === 'procurement' && <Procurement />}
+              {route === 'inventory' && <InventoryOptimization />}
+              {route === 'anomalies' && <Anomalies />}
             </main>
           </div>
         </div>
