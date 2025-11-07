@@ -1,5 +1,24 @@
-import React, { useMemo, useState } from 'react';
-import { Play, LineChart } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Play, LineChart, Hash } from 'lucide-react';
+
+// Deterministic PRNG (Mulberry32)
+function mulberry32(seed) {
+  return function () {
+    let t = (seed += 0x6d2b79f5);
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function hashStringToSeed(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+  return h >>> 0;
+}
 
 // Simple inline SVG line/area chart for history + prediction + confidence interval
 const ForecastChart = ({ data }) => {
@@ -7,12 +26,11 @@ const ForecastChart = ({ data }) => {
   const height = 260;
   const padding = 32;
 
-  const points = data.map((d) => d.value);
   const lows = data.map((d) => d.low ?? d.value);
   const highs = data.map((d) => d.high ?? d.value);
   const minY = Math.min(...lows) * 0.9;
   const maxY = Math.max(...highs) * 1.1;
-  const yScale = (v) => padding + (height - 2 * padding) * (1 - (v - minY) / (maxY - minY));
+  const yScale = (v) => padding + (height - 2 * padding) * (1 - (v - minY) / (maxY - minY || 1));
   const xScale = (i) => padding + (i * (width - 2 * padding)) / (data.length - 1 || 1);
 
   const linePath = (arr) =>
@@ -22,6 +40,7 @@ const ForecastChart = ({ data }) => {
 
   // Confidence band area path
   const areaPath = () => {
+    if (!data.length) return '';
     const top = data.map((d, i) => `L ${xScale(i).toFixed(2)} ${yScale(d.high ?? d.value).toFixed(2)}`);
     const bottom = [...data]
       .reverse()
@@ -33,6 +52,8 @@ const ForecastChart = ({ data }) => {
     return [start, ...top, `L ${xScale(data.length - 1).toFixed(2)} ${yScale(data[data.length - 1].low ?? data[data.length - 1].value).toFixed(2)}`, ...bottom, 'Z'].join(' ');
   };
 
+  if (!data.length) return null;
+
   return (
     <svg width={width} height={height} className="w-full">
       {/* Axes */}
@@ -42,17 +63,14 @@ const ForecastChart = ({ data }) => {
       {/* Confidence interval */}
       <path d={areaPath()} fill="rgba(16, 185, 129, 0.15)" />
 
-      {/* History line (solid) */}
-      <path d={linePath(data.map((d) => d.value))} fill="none" stroke="#34d399" strokeWidth={2} />
-
-      {/* Prediction line (dashed for last third) */}
+      {/* History + prediction split */}
       {(() => {
         const split = Math.floor(data.length * 0.7);
         const past = data.slice(0, split).map((d) => d.value);
         const future = data.slice(split).map((d) => d.value);
         return (
           <>
-            <path d={linePath(past)} fill="none" stroke="#60a5fa" strokeWidth={2} />
+            <path d={linePath(past)} fill="none" stroke="#34d399" strokeWidth={2} />
             <path d={linePath([past[past.length - 1], ...future])} fill="none" stroke="#60a5fa" strokeWidth={2} strokeDasharray="6 6" />
           </>
         );
@@ -61,12 +79,13 @@ const ForecastChart = ({ data }) => {
   );
 };
 
-const generateSeries = (n = 36, base = 100, noise = 12) => {
+const generateSeries = (rng, n = 36, base = 100, noise = 12) => {
   const arr = [];
   let val = base;
   for (let i = 0; i < n; i++) {
     const season = 10 * Math.sin((i / 12) * Math.PI * 2);
-    val = val + (Math.random() - 0.5) * noise + season + (i > n * 0.7 ? 1.2 : 0);
+    // pseudo-noise from rng
+    val = val + (rng() - 0.5) * noise + season + (i > n * 0.7 ? 1.2 : 0);
     const low = val * 0.9;
     const high = val * 1.1;
     arr.push({ value: Math.max(0, Math.round(val)), low, high });
@@ -75,21 +94,33 @@ const generateSeries = (n = 36, base = 100, noise = 12) => {
 };
 
 const Forecasting = () => {
-  const products = ['Widget A', 'Widget B', 'Gadget C', 'Device D'];
-  const [selected, setSelected] = useState(products[0]);
-  const [data, setData] = useState(generateSeries());
+  const [productId, setProductId] = useState('P-1001');
+  const [data, setData] = useState([]);
+  const [runCount, setRunCount] = useState(0);
   const [running, setRunning] = useState(false);
+
+  // Generate series any time productId or runCount changes (deterministic per product)
+  useEffect(() => {
+    const seed = hashStringToSeed(`${productId}::${runCount}`);
+    const rng = mulberry32(seed);
+    // derive base and noise deterministically
+    const base = 90 + Math.floor(rng() * 80); // 90..170
+    const noise = 8 + Math.floor(rng() * 12); // 8..20
+    const points = 40; // fixed horizon
+    setData(generateSeries(rng, points, base, noise));
+  }, [productId, runCount]);
 
   const runModel = () => {
     setRunning(true);
     setTimeout(() => {
-      // Regenerate demo prediction with slightly different pattern
-      setData(generateSeries(40, 110 + Math.random() * 30, 14));
+      // bump runCount to create a new deterministic trajectory for same product
+      setRunCount((c) => c + 1);
       setRunning(false);
-    }, 600);
+    }, 500);
   };
 
   const stats = useMemo(() => {
+    if (!data.length) return { last: 0, avg: 0, ci: '±0%' };
     const last = data[data.length - 1]?.value ?? 0;
     const avg = Math.round(data.reduce((a, b) => a + b.value, 0) / data.length);
     return { last, avg, ci: '±10%' };
@@ -100,20 +131,18 @@ const Forecasting = () => {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-semibold">Forecasting</h2>
-          <p className="text-sm text-white/70">Run GAT-LSTM (demo) and view predictions with confidence intervals.</p>
+          <p className="text-sm text-white/70">Enter a product ID to view its demand history and prediction with confidence intervals.</p>
         </div>
         <div className="flex items-center gap-3">
-          <select
-            className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm focus:outline-none"
-            value={selected}
-            onChange={(e) => setSelected(e.target.value)}
-          >
-            {products.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2">
+            <Hash className="h-4 w-4 text-white/70" />
+            <input
+              value={productId}
+              onChange={(e) => setProductId(e.target.value.trim())}
+              placeholder="Enter Product ID (e.g., P-1001)"
+              className="w-44 bg-transparent text-sm placeholder:text-white/40 focus:outline-none"
+            />
+          </div>
           <button
             onClick={runModel}
             disabled={running}
@@ -127,15 +156,21 @@ const Forecasting = () => {
       </div>
 
       <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-white/80">
             <LineChart className="h-5 w-5 text-emerald-300" />
-            <span className="text-sm">{selected} demand prediction</span>
+            <span className="text-sm">Product {productId || '—'} demand prediction</span>
           </div>
           <div className="flex gap-4 text-xs text-white/70">
-            <span>Avg: <span className="text-white">{stats.avg}</span></span>
-            <span>Last: <span className="text-white">{stats.last}</span></span>
-            <span>CI: <span className="text-white">{stats.ci}</span></span>
+            <span>
+              Avg: <span className="text-white">{stats.avg}</span>
+            </span>
+            <span>
+              Last: <span className="text-white">{stats.last}</span>
+            </span>
+            <span>
+              CI: <span className="text-white">{stats.ci}</span>
+            </span>
           </div>
         </div>
         <div className="w-full overflow-x-auto">
